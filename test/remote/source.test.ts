@@ -114,3 +114,15 @@ test("a mismatched response id fails pending and future operations", async () =>
     );
     input.end();
 });
+
+test("remote source bridge exposes input EOF so its process can terminate", async () => {
+    const input = new AsyncInput();
+    const bridge = new RemoteSourceBridge({ input, write: () => undefined });
+    bridge.start();
+
+    const closed = bridge.waitUntilClosed();
+    input.end();
+
+    await expect(closed).resolves.toBeUndefined();
+    await expect(bridge.request("focus_project", "/remote/repo")).rejects.toThrow("input ended");
+});

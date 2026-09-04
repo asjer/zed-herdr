@@ -112,16 +112,31 @@ const waitForLines = async (path: string, count: number): Promise<ReadonlyArray<
     throw new Error(`Timed out waiting for ${count} Zed records`);
 };
 
+const waitForProcessExit = async (pid: number, timeoutMs: number): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        try {
+            process.kill(pid, 0);
+        } catch {
+            return true;
+        }
+        await Bun.sleep(25);
+    }
+    return false;
+};
+
 test("built remote bridge carries authoritative remote Git roots to local Zed over one SSH process", async () => {
     const directory = await mkdtemp(join(tmpdir(), "zed-herdr-remote-e2e-"));
     const remoteHome = join(directory, "remote-home");
     const socketPath = join(directory, "herdr.sock");
     const zedRecords = join(directory, "zed-records.ndjson");
+    const remotePidFile = join(directory, "remote-source.pid");
     const fakeSsh = join(directory, "ssh");
     const fakeScp = join(directory, "scp");
     const fakeZed = join(directory, "zed");
     const repoPath = join(directory, "repo with space");
     let client: Bun.Subprocess | undefined;
+    let remoteExited = true;
     const herdr = new HerdRServer(socketPath);
 
     try {
@@ -131,7 +146,7 @@ test("built remote bridge carries authoritative remote Git roots to local Zed ov
         await writeFile(
             fakeSsh,
             `#!/usr/bin/env bun
-import { mkdir, rename } from "node:fs/promises";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 const args = process.argv.slice(2);
 const home = process.env.FAKE_REMOTE_HOME;
@@ -155,6 +170,7 @@ if (command[0] !== "bun") process.exit(91);
 const child = Bun.spawn([process.execPath, join(home, command[1])], {
   env: process.env, stdin: "inherit", stdout: "inherit", stderr: "inherit"
 });
+await writeFile(process.env.REMOTE_PID_FILE, String(child.pid));
 process.exit(await child.exited);
 `,
         );
@@ -183,6 +199,7 @@ await appendFile(process.env.ZED_RECORDS, JSON.stringify(process.argv.slice(2)) 
             env: {
                 ...process.env,
                 FAKE_REMOTE_HOME: remoteHome,
+                REMOTE_PID_FILE: remotePidFile,
                 HERDR_SOCKET_PATH: socketPath,
                 ZED_BIN: fakeZed,
                 ZED_RECORDS: zedRecords,
@@ -218,7 +235,21 @@ await appendFile(process.env.ZED_RECORDS, JSON.stringify(process.argv.slice(2)) 
     } finally {
         client?.kill(15);
         if (client !== undefined) await client.exited;
+        const remotePidText = await readFile(remotePidFile, "utf8").catch(() => "");
+        if (remotePidText) {
+            const remotePid = Number(remotePidText);
+            remoteExited = await waitForProcessExit(remotePid, 1_000);
+            if (!remoteExited) {
+                try {
+                    process.kill(remotePid, "SIGTERM");
+                } catch {
+                    // It exited between the check and cleanup.
+                }
+                await waitForProcessExit(remotePid, 1_000);
+            }
+        }
         herdr.close();
         await rm(directory, { recursive: true, force: true });
     }
+    expect(remoteExited).toBe(true);
 }, 15_000);

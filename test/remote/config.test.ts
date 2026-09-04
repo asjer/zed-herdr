@@ -24,6 +24,9 @@ test("remote config accepts SSH aliases and optional named sessions", () => {
 test("remote config rejects option injection, whitespace, ports, and unsafe sessions", () => {
     for (const arguments_ of [
         ["remote", "-oProxyCommand=bad"],
+        ["remote", "-Jattacker@host"],
+        ["remote", "-Fconfig@host"],
+        ["remote", "-v@host"],
         ["remote", "host name"],
         ["remote", "host:2222"],
         ["remote", "host", "--session", "../../bad"],

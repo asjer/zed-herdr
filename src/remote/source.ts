@@ -34,8 +34,10 @@ type Pending = {
 export class RemoteSourceBridge {
     readonly #io: RemoteBridgeIo;
     readonly #pending = new Map<string, Pending>();
+    readonly #completion = Promise.withResolvers<void>();
     #failure: Error | null = null;
     #reader: Promise<void> | null = null;
+    #completed = false;
 
     constructor(io: RemoteBridgeIo) {
         this.#io = io;
@@ -51,6 +53,10 @@ export class RemoteSourceBridge {
 
     close(): void {
         this.#failAll(new RemoteProtocolError("Remote bridge closed"));
+    }
+
+    waitUntilClosed(): Promise<void> {
+        return this.#completion.promise;
     }
 
     request(operation: RemoteRequest["operation"], path: string): Promise<void> {
@@ -123,6 +129,10 @@ export class RemoteSourceBridge {
             pending.reject(this.#failure);
         }
         this.#pending.clear();
+        if (!this.#completed) {
+            this.#completed = true;
+            this.#completion.resolve();
+        }
     }
 }
 
@@ -178,7 +188,10 @@ export const runRemoteSource = (io: RemoteBridgeIo) =>
             ).pipe(Layer.provideMerge(JsonLoggerLive));
             return yield* Effect.gen(function* () {
                 const daemon = yield* makeSyncDaemon;
-                return yield* daemon.run;
+                return yield* Effect.raceFirst(
+                    daemon.run,
+                    Effect.promise(() => bridge.waitUntilClosed()),
+                );
             }).pipe(Effect.provide(layer));
         }),
     ).pipe(Effect.provide(JsonLoggerLive));

@@ -9,7 +9,8 @@ export interface RemoteClientConfig {
     readonly zedBin: string | undefined;
 }
 
-const SSH_TARGET = /^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9](?:[A-Za-z0-9._-]{0,253}[A-Za-z0-9])?$/u;
+const SSH_TARGET =
+    /^(?:[A-Za-z0-9][A-Za-z0-9._-]{0,63}@)?[A-Za-z0-9](?:[A-Za-z0-9._-]{0,253}[A-Za-z0-9])?$/u;
 const SESSION = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 
 export const isValidSshTarget = (value: string): boolean =>
