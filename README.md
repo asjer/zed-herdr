@@ -30,6 +30,49 @@ bun run start
 
 Both commands require access to the current HerdR session socket. The built artifact can also be started directly with `bun ./dist/index.js daemon`.
 
+## Remote HerdR with local Zed
+
+Remote mode is an explicit foreground companion for `herdr --remote`. Build locally, then start one
+companion for each remote target and optional named session:
+
+```bash
+bun run build
+bun ./dist/index.js remote pi-remote.exe.xyz
+# named remote session:
+bun ./dist/index.js remote pi-remote.exe.xyz --session agents
+```
+
+Keep that command running while attaching in another terminal:
+
+```bash
+herdr --remote pi-remote.exe.xyz
+# or: herdr --remote pi-remote.exe.xyz --session agents
+```
+
+The SSH target must be the same SSH-config alias Zed can use. Put ports, jump hosts, identity files,
+and other SSH options in `~/.ssh/config`; remote mode deliberately accepts no caller-provided SSH
+flags. The local machine needs OpenSSH and Zed. The remote host needs Bun, Git, HerdR 0.7.3+, and a
+running HerdR session. Bun must be available to a noninteractive SSH command. The plugin does not
+need to be installed remotely. If it was previously enabled there, disable it so its normal hook
+does not open a second daemon that tries to control a remote desktop:
+
+```bash
+herdr plugin disable artisann.zed-herdr
+```
+
+At startup the companion hashes `dist/remote-source.js`, uploads it under the remote user's
+`.cache/zed-herdr/`, and starts it over one long-lived SSH connection. The source reads only the
+remote HerdR socket, validates worktree Git roots on the remote host, and sends bounded typed
+ensure/focus requests. The local process invokes only
+`zed -e ssh://<ssh-target>/<encoded-absolute-path>` and acknowledges the result before the remote
+synchronizer records success.
+
+Remote mode currently supports **worktree-backed workspaces only**. Non-worktree workspaces require
+the plugin's remote cwd hint, which is not forwarded by HerdR's thin client. Automatic start/stop
+with `herdr --remote`, arbitrary SSH command-line options, and remote hosts without Bun are also out
+of scope for this first release. Stop the companion with `Ctrl+C`; an SSH disconnect ends it, so
+restart the command after reconnecting.
+
 ## Health and inspection
 
 Ask the daemon on the current session's control socket for its health:
@@ -79,7 +122,7 @@ Set `ZED_BIN` to a non-empty executable path to select a Zed CLI explicitly:
 export ZED_BIN=/absolute/path/to/zed
 ```
 
-Without `ZED_BIN`, the daemon resolves `zed` from `PATH`; on macOS an executable-not-found result also tries Zed's standard application CLI path. It invokes only `zed -e <absolute-git-root>`.
+Without `ZED_BIN`, the daemon resolves `zed` from `PATH`; on macOS an executable-not-found result also tries Zed's standard application CLI path. Local mode invokes only `zed -e <absolute-git-root>`; remote mode invokes the same exact argv with a percent-encoded `ssh://` project target.
 
 For HerdR transport, `HERDR_SOCKET_PATH` takes precedence. Otherwise the socket is resolved as:
 
@@ -125,7 +168,9 @@ action target but leaves the user-configured keybinding in place.
 
 - **Protocol mismatch:** HerdR must report protocol 16 or newer. A value below 16 is logged as `herdr_protocol_unsupported` and stops reconnecting rather than guessing or downgrading. Newer values are accepted; values above the highest tested protocol are reported by `health` with `beyondTested: true` and log `herdr_protocol_beyond_tested` once.
 - **Socket or health failure:** confirm `HERDR_SOCKET_PATH`, `HERDR_SESSION`, and `XDG_CONFIG_HOME` describe the intended session, then inspect the plugin log and daemon pane output above. Focusing or creating a workspace will run the activation hook again.
-- **Zed errors:** ensure `ZED_BIN` points to an executable, or that `zed` is on `PATH`; inspect the daemon output for the failed `zed -e` command. The daemon leaves HerdR and existing Zed state unchanged when Zed rejects or times out.
+- **Zed errors:** ensure `ZED_BIN` points to an executable, or that `zed` is on `PATH`; inspect the daemon or remote-companion output for the failed `zed -e` command. The daemon leaves HerdR and existing Zed state unchanged when Zed rejects or times out.
+- **Remote source exits before hello:** verify normal `ssh <target>`, then verify `ssh <target> bun --version`; remote mode does not guess an interactive-shell Bun path.
+- **Remote workspace is skipped:** remote mode intentionally has no cwd-hint bridge. Use a HerdR worktree-backed workspace and inspect the remote companion's `workspace_sync_skipped` log.
 
 ## Disable or remove
 

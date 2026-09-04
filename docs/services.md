@@ -45,7 +45,9 @@ needed.
 
 [`EditorAdapter`](../src/services/editor-adapter.ts) exposes only ensure and focus. Both operations
 return `void` on success and fail with `EditorAdapterError`; cache and process behavior belong to
-the implementation.
+the implementation. Local mode supplies the direct Zed adapter. A remote source supplies an
+acknowledged bridge adapter, while the local bridge endpoint supplies the direct Zed adapter with a
+fixed SSH authority. The synchronization core does not learn SSH or wire-protocol concerns.
 
 ## Flow
 
@@ -53,7 +55,9 @@ the implementation.
   client's `snapshot` and `events` onto `WorkspaceSource`.
 - [`runDaemon`](../src/app.ts) projects owner-validated control notifications through a bounded
   queue and supplies the resulting stream as `WorkspaceHintSource`.
-- [`makeZedEditorAdapterLayer`](../src/editor/zed.ts) implements `EditorAdapter`.
+- [`makeZedEditorAdapterLayer`](../src/editor/zed.ts) implements the local `EditorAdapter`.
+- [`makeRemoteBridgeEditorAdapter`](../src/remote/source.ts) implements the remote source's
+  acknowledgement-dependent `EditorAdapter`.
 - [`makeSyncDaemon`](../src/sync/daemon.ts) depends only on these three tags.
 
 This keeps transport types out of core domain types and keeps low-level plugin control and locking
@@ -73,6 +77,8 @@ ports do not hide them or add fallback behavior.
 - [`src/services/workspace-hint-source.ts`](../src/services/workspace-hint-source.ts)
 - [`src/services/editor-adapter.ts`](../src/services/editor-adapter.ts)
 - [`test/sync/daemon.test.ts`](../test/sync/daemon.test.ts) exercises the core against these ports.
+- [`test/remote/source.test.ts`](../test/remote/source.test.ts) exercises the bridge adapter through
+  the same editor interface.
 
 ## Related
 

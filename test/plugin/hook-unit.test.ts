@@ -55,7 +55,7 @@ test("declares the official HerdR v0.7.3 plugin manifest", async () => {
     expect(Bun.TOML.parse(manifest)).toEqual({
         id: "artisann.zed-herdr",
         name: "Zed Workspace Sync",
-        version: "0.1.0",
+        version: "0.2.0",
         min_herdr_version: "0.7.3",
         platforms: ["macos", "linux"],
         build: [

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-`zed-herdr` is a private Bun/TypeScript application that keeps the active HerdR workspace available in an existing Zed session. HerdR socket protocol 16 or newer is authoritative for workspace state, with compatibility tested through protocol 19. The daemon consumes read-only HerdR snapshots/events and plugin cwd hints, resolves Git roots, then invokes only Zed's supported `zed -e <absolute-git-root>` command. It must not inspect Zed databases, replace windows, kill processes, or mutate existing HerdR panes.
+`zed-herdr` is a private Bun/TypeScript application that keeps the active HerdR workspace available in an existing Zed session. HerdR socket protocol 16 or newer is authoritative for workspace state, with compatibility tested through protocol 19. The local daemon consumes read-only HerdR snapshots/events and plugin cwd hints, resolves Git roots, then invokes only Zed's supported `zed -e <absolute-git-root>` command. Opt-in remote mode runs the same resolver/synchronizer beside the remote HerdR socket and carries acknowledged editor operations over one bounded SSH bridge to local `zed -e <ssh-url>`. It must not inspect Zed databases, replace windows, kill unrelated processes, or mutate existing HerdR panes.
 
 Supported hosts are macOS and Linux with Bun, Git, HerdR `>=0.7.3` reporting protocol `>=16`, and the Zed CLI.
 
@@ -15,6 +15,7 @@ Supported hosts are macOS and Linux with Bun, Git, HerdR `>=0.7.3` reporting pro
 5. `src/sync/resolve-project.ts` prefers HerdR `checkoutPath`, falls back to the matching hook cwd hint, verifies a directory, and runs `git -C <path> rev-parse --show-toplevel`. Invalid, inaccessible, ambiguous, or non-Git paths are logged and never reach the editor adapter.
 6. `src/editor/zed.ts` serializes shell-free Zed calls. `ensureProject` caches only successful roots; `focusProject` always runs `zed -e`.
 7. Plugin hooks send cwd hints to the owner-only control socket. When no live daemon exists, `src/plugin/hook.ts` coordinates contenders with a token lock and opens one unfocused HerdR daemon tab. `health` reads daemon identity; `toggle` pauses or resumes the live synchronization daemon; neither starts one.
+8. `remote <ssh-target> [--session <name>]` hashes and uploads `dist/remote-source.js` to a remote content-addressed cache, then keeps one SSH child alive. The source resolves worktree paths remotely and uses a bounded acknowledged NDJSON editor adapter; the local endpoint invokes Zed with an encoded SSH project target. Remote v1 intentionally has no cwd-hint bridge.
 
 Preserve these boundaries: transport types do not enter core domain types, stale generations cannot mutate cache or call Zed, and plugin control/hook code remains separate from the Effect-based synchronization core.
 
@@ -28,6 +29,7 @@ Preserve these boundaries: transport types do not enter core domain types, stale
 | `src/herdr/`    | Minimum-protocol wire schemas, NDJSON framing, Unix-socket client, and core source projection. |
 | `src/editor/`   | Timeout-safe, state-preserving Zed CLI adapter.                                                |
 | `src/plugin/`   | Local control protocol/socket plus hook decoding, locking, and pane startup.                   |
+| `src/remote/`   | Strict CLI config, bounded bridge protocol, SSH transport, and remote source/client runtimes.  |
 | `test/`         | Bun unit, integration, socket-safety, and built-artifact E2E suites by subsystem.              |
 | `dist/`         | Generated Bun bundle; ignored by Git and recreated by `bun run build`.                         |
 
@@ -44,6 +46,7 @@ bun run start                  # run the source daemon
 bun run build                  # bundle index.ts to dist/index.js for Bun
 bun ./dist/index.js daemon     # run the built daemon
 bun ./dist/index.js health     # query an existing matching daemon; does not start one
+bun ./dist/index.js remote host # bridge a remote HerdR session to local Zed
 bun test                       # run all tests
 bun test test/sync/daemon.test.ts  # run one suite directly
 bun run typecheck              # tsc --noEmit
@@ -79,7 +82,9 @@ Build before any command or E2E test that uses `dist/index.js`.
 - Keep HerdR requests read-only and allowlisted: only `session.snapshot` and `events.subscribe`. Decode only transport fields the core consumes, ignore unknown fields and unrelated event names, and invalidate on recognized lifecycle names without decoding discarded payloads. Protocols below 16 are terminally rejected; newer protocols are accepted, with a once-per-process warning above the highest tested revision.
 - Preserve checkout-path precedence over hook hints. Do not infer projects from `PWD`, pane metadata, focus order, or editor internals. Linked worktrees remain distinct by canonical path.
 - Never cache failed resolution or editor operations. Recheck generation before cache/editor side effects; disconnecting generation N must leave no effects while N+1 may proceed.
-- Invoke Zed without a shell and with only `-e <absolute-git-root>`. Preserve the five-second timeout, process termination, and bounded final stderr tail.
+- Invoke Zed without a shell and with only `-e <project-target>`. Local targets are absolute Git roots; remote targets are percent-encoded `ssh://` URLs built from a fixed validated authority and an absolute POSIX Git root. Preserve the five-second timeout, process termination, and bounded final stderr tail.
+- Keep remote bridge frames versioned, exact-schema, fatal-UTF-8, newline-delimited, and at most 64 KiB. Only `ensure_project` and `focus_project` may cross it, and remote success requires a matching local acknowledgement.
+- Treat SSH aliases and session names as strict tokens. Remote paths never enter SSH argv or remote command text. The only SSH commands are fixed cache setup/upload and one long-lived Bun source process.
 - Treat control sockets and hook locks as owner-only resources. Preserve UID, mode, inode, symlink, one-frame, fatal UTF-8, and 64 KiB checks; never blindly unlink or replace a socket path.
 - Keep stable JSON log event names and fields (`workspace_sync_started`, `workspace_sync_succeeded`, `workspace_sync_skipped`, `workspace_sync_failed`). `elapsed_ms` begins at event ingress and includes the debounce.
 
@@ -99,6 +104,10 @@ Build before any command or E2E test that uses `dist/index.js`.
 | `src/editor/zed.ts`           | Only supported editor integration path and timeout behavior.                           |
 | `src/plugin/control.ts`       | Owner/inode-safe control socket, exact one-frame request/response handling.            |
 | `src/plugin/hook.ts`          | Hook precedence, lock ownership, deadline, and `--no-focus` pane startup.              |
+| `src/remote/client.ts`        | Local bridge coordinator, local Zed dispatch, acknowledgement, and child cleanup.      |
+| `src/remote/source.ts`        | Remote acknowledged editor adapter and remote synchronization runtime.                 |
+| `src/remote/protocol.ts`      | Versioned bounded NDJSON frames shared by both bridge endpoints.                       |
+| `src/remote/transport.ts`     | Exact-argv content-addressed OpenSSH bootstrap and long-lived connection.              |
 | `herdr-plugin.toml`           | Plugin metadata, build commands, lifecycle hooks, and daemon pane declaration.         |
 | `package.json`                | Authoritative development commands and dependency ranges.                              |
 | `tsconfig.json`               | Strict Bun-oriented TypeScript contract.                                               |
@@ -122,7 +131,7 @@ Build before any command or E2E test that uses `dist/index.js`.
 - Test observable contracts, not implementation text: exact NDJSON bytes/JSON, CLI argv and ordering, generation transitions, editor-call serialization/dedupe, retry bounds, socket/lock ownership, timeout cleanup, and process exit behavior.
 - Use `Effect.scoped`/`Effect.runPromise` for Effect harnesses. Prefer `TestClock` for debounce and timeout behavior; use fake timers only where the Promise/Bun boundary requires them. Always restore timers and spies.
 - Unix-socket tests use temporary paths and real `Bun.listen`/`Bun.connect`; Git-resolution tests create temporary repositories and linked worktrees. Close listeners, interrupt fibers, terminate children, and remove temporary directories in `finally`.
-- `test/e2e/daemon.test.ts` exercises the built `dist/index.js` against fake HerdR and Zed socket peers. Run `bun run build` first; its main scenario has a 15-second timeout.
+- `test/e2e/daemon.test.ts` exercises the built `dist/index.js` against fake HerdR and Zed socket peers. `test/e2e/remote.test.ts` additionally runs both built artifacts through fake SSH/SCP, a real Unix socket, real Git resolution, and a fake local Zed. Run `bun run build` first; E2E scenarios have a 15-second timeout.
 - Do not assert exact timestamps or nondeterministic jitter. Assert stable tags, fields, ranges, ordering, and final effects.
 - No numeric coverage threshold is configured. Every behavior change should add or update the narrow deterministic contract test; changes crossing the built CLI/socket boundary should also be covered by E2E.
 - Before pushing, run `bun run check`. Expected malformed-frame/reconnect fixtures emit warning logs while still passing.
