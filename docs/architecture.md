@@ -27,6 +27,20 @@ Ownership: [HerdR workspace source](herdr.md), [Service ports](services.md),
 [Synchronization core](synchronization.md), [Plugin lifecycle and control](plugin.md), and
 [Zed editor adapter](editor.md).
 
+Remote mode keeps the same core on the remote host and replaces only the editor adapter. A local
+companion installs and starts the source over one SSH connection, validates its bounded protocol,
+and owns the local Zed adapter:
+
+```mermaid
+flowchart LR
+    RemoteHerdR["remote HerdR socket"] --> RemoteSource["remote-source / SyncDaemon"]
+    RemoteSource --> BridgeAdapter["acknowledged bridge EditorAdapter"]
+    BridgeAdapter -->|"bounded NDJSON over SSH"| LocalClient["local remote client"]
+    LocalClient --> LocalZed["local Zed: ssh:// target"]
+    LocalZed -->|"success or bounded failure"| LocalClient
+    LocalClient -->|"correlated acknowledgement"| BridgeAdapter
+```
+
 ## Normal daemon flow
 
 The runtime does not derive editor calls from the bootstrap snapshot. S1 establishes protocol
@@ -67,6 +81,23 @@ sequenceDiagram
 See [Runtime composition](runtime.md), [HerdR workspace source](herdr.md),
 [Service ports](services.md), [Synchronization core](synchronization.md), and
 [Zed editor adapter](editor.md).
+
+## Remote companion flow
+
+1. `remote <ssh-target> [--session <name>]` validates option-free tokens before starting a process.
+2. The local client hashes the standalone source bundle and copies it to a content-addressed path
+   below the remote user's `.cache/zed-herdr/` directory.
+3. One long-lived exact-argv SSH process starts that bundle with the optional fixed
+   `HERDR_SESSION=<name>` environment token.
+4. The source performs the normal S1/subscription/S2 sequence and resolves Git roots on the remote
+   filesystem.
+5. Its bridge adapter sends only `ensure_project` and `focus_project` requests. The local client
+   validates the version, frame, operation, id, and absolute path, invokes local Zed with an encoded
+   SSH URI, and returns a correlated acknowledgement.
+6. Only acknowledged successes enter synchronization caches; failure remains retryable.
+
+Remote mode supplies an empty `WorkspaceHintSource`, so v1 skips non-worktree workspaces. It does
+not tunnel plugin control sockets or modify the remote HerdR server.
 
 ## Plugin hook flow
 
@@ -130,6 +161,10 @@ See [Plugin lifecycle and control](plugin.md), [Runtime composition](runtime.md)
 - Control ownership and protocol failures fail closed; only control unavailability enters startup
   retry.
 - Failed editor operations are not recorded as successful and remain retryable.
+- Remote frames use fatal UTF-8, exact versioned schemas, a 64 KiB limit, bounded fields, and
+  correlated request ids before any local Zed call.
+- SSH targets and sessions are strict tokens; remote paths stay protocol data and never become
+  command text.
 
 The graph has no reverse editor-to-HerdR call and no mutating HerdR method. Plugin control publishes
 cwd hints; it does not change HerdR workspace state.
@@ -143,7 +178,12 @@ cwd hints; it does not change HerdR workspace state.
 - [`src/plugin/hook.ts`](../src/plugin/hook.ts) and
   [`src/plugin/control.ts`](../src/plugin/control.ts) own the hook branch.
 - [`src/editor/zed.ts`](../src/editor/zed.ts) owns the only Zed invocation.
+- [`src/remote/client.ts`](../src/remote/client.ts),
+  [`src/remote/source.ts`](../src/remote/source.ts), and
+  [`src/remote/protocol.ts`](../src/remote/protocol.ts) own the remote bridge.
 - [`test/e2e/daemon.test.ts`](../test/e2e/daemon.test.ts) exercises the normal built-daemon flow.
+- [`test/e2e/remote.test.ts`](../test/e2e/remote.test.ts) exercises both built remote artifacts over
+  fake OpenSSH commands and a real Unix socket.
 - [`test/plugin/control.test.ts`](../test/plugin/control.test.ts) exercises daemon reuse, startup,
   readiness, and hint publication.
 

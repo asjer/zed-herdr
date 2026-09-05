@@ -11,13 +11,13 @@ and the separate local control server. Synchronization policy remains in the
 ## Responsibilities
 
 [`index.ts`](../index.ts) calls `BunRuntime.runMain(runCli(), { disablePrettyLogger: true })`.
-[`runCli`](../src/cli.ts) accepts exactly one argument and exposes this exact usage literal:
+[`runCli`](../src/cli.ts) exposes this exact usage literal:
 
 ```text
-Usage: zed-herdr <daemon|hook|health|toggle>
+Usage: zed-herdr <daemon|hook|health|toggle> | zed-herdr remote <ssh-target> [--session <name>]
 ```
 
-The one argument dispatches as follows:
+Commands dispatch as follows:
 
 | Command  | Runtime path                                                                 |
 | -------- | ---------------------------------------------------------------------------- |
@@ -25,8 +25,9 @@ The one argument dispatches as follows:
 | `hook`   | Promise-based `runHook` wrapped at the CLI boundary                          |
 | `health` | Promise-based `healthControl` plus daemon-identity validation                |
 | `toggle` | Promise-based `toggleControl`, printing the daemon's resulting enabled state |
+| `remote` | strict remote config → content-addressed install → long-lived SSH bridge     |
 
-Missing, extra, or unknown arguments print the usage and set exit status `2`.
+Missing, extra, unknown, or unsafe arguments print the usage and set exit status `2`.
 
 ## Contracts and state
 
@@ -46,6 +47,20 @@ resolve `zed` through `PATH`.
 
 The layer graph supplies implementations to `makeSyncDaemon`; it does not move plugin socket or
 lock coordination into the Effect service graph.
+
+## Remote runtime
+
+[`parseRemoteConfig`](../src/remote/config.ts) accepts only `[user@]host-or-alias` and an optional
+ASCII session token. SSH ports, keys, jump hosts, and other options remain SSH-config concerns.
+`runRemoteClient` hashes `dist/remote-source.js`, uses fixed `ssh`/`scp` argv to place it in a remote
+content-addressed cache, and owns the one long-lived SSH child. The standalone
+[`remote-source.ts`](../remote-source.ts) redirects Effect logs to stderr so stdout is exclusively
+the bridge protocol.
+
+The remote source composes the existing HerdR source and synchronization daemon with an empty hint
+stream and an acknowledged bridge editor adapter. Its local counterpart composes the existing Zed
+adapter with a fixed SSH authority. The bridge lifecycle is separate from the plugin control socket
+and ends when interrupted or when SSH exits.
 
 ## Flow
 
@@ -80,7 +95,12 @@ promising the hook/health formatting contract for daemon failures.
 - [`src/cli.ts`](../src/cli.ts)
 - [`src/config.ts`](../src/config.ts)
 - [`src/app.ts`](../src/app.ts)
+- [`src/remote/config.ts`](../src/remote/config.ts)
+- [`src/remote/client.ts`](../src/remote/client.ts)
+- [`src/remote/transport.ts`](../src/remote/transport.ts)
+- [`remote-source.ts`](../remote-source.ts)
 - [`test/e2e/daemon.test.ts`](../test/e2e/daemon.test.ts) covers the built daemon path.
+- [`test/e2e/remote.test.ts`](../test/e2e/remote.test.ts) covers the built remote bridge.
 - [`test/plugin/control.test.ts`](../test/plugin/control.test.ts) covers the runtime-facing control
   contract.
 

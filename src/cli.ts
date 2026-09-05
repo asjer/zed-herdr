@@ -9,8 +9,11 @@ import {
     toggleControl,
 } from "./plugin/control.ts";
 import { runHook } from "./plugin/hook.ts";
+import { runRemoteClient } from "./remote/client.ts";
+import { parseRemoteConfig } from "./remote/config.ts";
 
-export const USAGE = "Usage: zed-herdr <daemon|hook|health|toggle>";
+export const USAGE =
+    "Usage: zed-herdr <daemon|hook|health|toggle> | zed-herdr remote <ssh-target> [--session <name>]";
 
 const invalidCommand = Effect.sync(() => {
     console.error(USAGE);
@@ -69,6 +72,26 @@ export const runCli = (
     arguments_: ReadonlyArray<string> = process.argv.slice(2),
     environment: NodeJS.ProcessEnv = process.env,
 ) => {
+    if (arguments_[0] === "remote") {
+        return Effect.try({
+            try: () => parseRemoteConfig(arguments_, environment),
+            catch: (cause) => cause,
+        }).pipe(
+            Effect.matchEffect({
+                onFailure: (cause) =>
+                    Effect.sync(() => {
+                        console.error(cause instanceof Error ? cause.message : String(cause));
+                        console.error(USAGE);
+                        process.exitCode = 2;
+                    }),
+                onSuccess: (config) =>
+                    Effect.tryPromise({
+                        try: () => runRemoteClient(config),
+                        catch: (cause) => cause,
+                    }).pipe(Effect.catchAll(commandFailed)),
+            }),
+        );
+    }
     if (arguments_.length !== 1) {
         return invalidCommand;
     }

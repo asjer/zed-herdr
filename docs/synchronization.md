@@ -23,7 +23,8 @@ The daemon owns:
 - stable structured synchronization logs.
 
 [`resolveProject`](../src/sync/resolve-project.ts) owns filesystem and Git validation; editor
-process policy remains in the [Zed adapter](editor.md).
+process policy remains in the [Zed adapter](editor.md). In remote mode this same resolver runs on
+the remote host, so only canonical remotely validated Git roots enter the bridge.
 
 ## Contracts and state
 
@@ -90,7 +91,9 @@ collapsed by repository identity.
 
 An ensure failure logs `workspace_sync_failed`, is not added to `ensuredGitRoots`, and does not stop
 later roots in the same pass. A later trigger retries that root. An ensure success is recorded only
-if its generation is still live.
+if its generation is still live. In remote mode the bridge adapter completes only after the local
+Zed adapter returns a correlated success acknowledgement; disconnects, protocol failures, timeouts,
+and negative acknowledgements remain failures.
 
 A focus failure logs `workspace_sync_failed` and does not replace `lastSuccessful`; a later trigger
 retries it. A focus success is recorded only if its generation is still live. If either editor call
