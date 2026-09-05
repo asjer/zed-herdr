@@ -1,5 +1,6 @@
 import * as BunContext from "@effect/platform-bun/BunContext";
 import * as Effect from "effect/Effect";
+import { existsSync } from "node:fs";
 
 import { makeZedEditorAdapter } from "../editor/zed.ts";
 import type { EditorAdapterService } from "../services/editor-adapter.ts";
@@ -12,7 +13,12 @@ import {
     type RemoteRequest,
 } from "./protocol.ts";
 import type { RemoteClientConfig } from "./config.ts";
-import { makeOpenSshTransport, type RemoteChild, type RemoteTransport } from "./transport.ts";
+import {
+    makeOpenSshTransport,
+    type RemoteChild,
+    type RemoteSourceArtifact,
+    type RemoteTransport,
+} from "./transport.ts";
 
 const boundedMessage = (cause: unknown): string => {
     const rendered = cause instanceof Error ? cause.message : String(cause);
@@ -20,10 +26,19 @@ const boundedMessage = (cause: unknown): string => {
     return bounded || "Zed operation failed";
 };
 
-export const sourceArtifactDigest = async (path: string): Promise<string> => {
-    const bytes = await Bun.file(path).arrayBuffer();
-    return new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+export const snapshotSourceArtifact = async (path: string): Promise<RemoteSourceArtifact> => {
+    if (!existsSync(path)) {
+        throw new Error(`Remote source artifact does not exist: ${path}`);
+    }
+    const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
+    return {
+        bytes,
+        digest: new Bun.CryptoHasher("sha256").update(bytes).digest("hex"),
+    };
 };
+
+export const sourceArtifactDigest = async (path: string): Promise<string> =>
+    (await snapshotSourceArtifact(path)).digest;
 
 const isAbsoluteRemotePath = (path: string): boolean =>
     path.startsWith("/") && !path.includes("\0");
@@ -40,8 +55,8 @@ export const runRemoteClient = async (
     config: RemoteClientConfig,
     transport: RemoteTransport = makeOpenSshTransport(),
 ): Promise<void> => {
-    const digest = await sourceArtifactDigest(config.sourceArtifact);
-    const remotePath = await transport.install(config, digest);
+    const artifact = await snapshotSourceArtifact(config.sourceArtifact);
+    const remotePath = await transport.install(config, artifact);
     const child = transport.connect(config, remotePath);
     const adapter = await Effect.runPromise(
         makeZedEditorAdapter(config.zedBin, process.platform, config.sshTarget).pipe(

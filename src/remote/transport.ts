@@ -1,4 +1,6 @@
-import { existsSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { RemoteClientConfig } from "./config.ts";
 
@@ -16,8 +18,16 @@ export interface RemoteChild {
     readonly kill: (signal?: number) => void;
 }
 
+export interface RemoteSourceArtifact {
+    readonly bytes: Uint8Array;
+    readonly digest: string;
+}
+
 export interface RemoteTransport {
-    readonly install: (config: RemoteClientConfig, digest: string) => Promise<string>;
+    readonly install: (
+        config: RemoteClientConfig,
+        artifact: RemoteSourceArtifact,
+    ) => Promise<string>;
     readonly connect: (config: RemoteClientConfig, remotePath: string) => RemoteChild;
 }
 
@@ -50,11 +60,12 @@ export const remoteCacheCommand = (config: RemoteClientConfig): ReadonlyArray<st
 
 export const remoteUploadCommand = (
     config: RemoteClientConfig,
+    sourceArtifact: string,
     remotePath: string,
 ): ReadonlyArray<string> => [
     config.scpBin,
     "-q",
-    config.sourceArtifact,
+    sourceArtifact,
     `${config.sshTarget}:${remotePath}`,
 ];
 
@@ -71,6 +82,11 @@ export const remoteCommitCommand = (
     temporaryPath,
     remotePath,
 ];
+
+export const remoteCleanupCommand = (
+    config: RemoteClientConfig,
+    temporaryPath: string,
+): ReadonlyArray<string> => [config.sshBin, "-T", config.sshTarget, "rm", "-f", temporaryPath];
 
 export const remoteConnectCommand = (
     config: RemoteClientConfig,
@@ -98,22 +114,40 @@ const runChecked = async (argv: ReadonlyArray<string>, operation: string): Promi
 };
 
 export const makeOpenSshTransport = (): RemoteTransport => ({
-    install: async (config, digest) => {
-        if (!existsSync(config.sourceArtifact)) {
-            throw new Error(`Remote source artifact does not exist: ${config.sourceArtifact}`);
-        }
-        if (!/^[a-f0-9]{64}$/u.test(digest)) {
+    install: async (config, artifact) => {
+        const actualDigest = new Bun.CryptoHasher("sha256").update(artifact.bytes).digest("hex");
+        if (!/^[a-f0-9]{64}$/u.test(artifact.digest) || actualDigest !== artifact.digest) {
             throw new Error("Remote source digest is invalid");
         }
-        const remotePath = `${REMOTE_CACHE_DIRECTORY}/${digest}.js`;
+
+        const remotePath = `${REMOTE_CACHE_DIRECTORY}/${artifact.digest}.js`;
         const temporaryPath = `${remotePath}.${crypto.randomUUID()}.tmp`;
-        await runChecked(remoteCacheCommand(config), "Remote cache setup");
-        await runChecked(remoteUploadCommand(config, temporaryPath), "Remote source upload");
-        await runChecked(
-            remoteCommitCommand(config, temporaryPath, remotePath),
-            "Remote source install",
-        );
-        return remotePath;
+        const stagingDirectory = await mkdtemp(join(tmpdir(), "zed-herdr-upload-"));
+        const stagingPath = join(stagingDirectory, `${artifact.digest}.js`);
+
+        try {
+            await writeFile(stagingPath, artifact.bytes, { mode: 0o600 });
+            await runChecked(remoteCacheCommand(config), "Remote cache setup");
+            try {
+                await runChecked(
+                    remoteUploadCommand(config, stagingPath, temporaryPath),
+                    "Remote source upload",
+                );
+                await runChecked(
+                    remoteCommitCommand(config, temporaryPath, remotePath),
+                    "Remote source install",
+                );
+            } catch (cause) {
+                await runChecked(
+                    remoteCleanupCommand(config, temporaryPath),
+                    "Remote source cleanup",
+                ).catch(() => undefined);
+                throw cause;
+            }
+            return remotePath;
+        } finally {
+            await rm(stagingDirectory, { recursive: true, force: true }).catch(() => undefined);
+        }
     },
     connect: (config, remotePath) => {
         if (!/^\.cache\/zed-herdr\/[a-f0-9]{64}\.js$/u.test(remotePath)) {

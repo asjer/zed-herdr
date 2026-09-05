@@ -75,3 +75,17 @@ test("remote framing yields multiple lines and accepts CRLF", () => {
     expect(decoder.push(encoder.encode("one\r\ntwo\n"))).toEqual(["one", "two"]);
     decoder.end();
 });
+
+test("remote framing handles a maximum frame split into one-byte chunks", () => {
+    const decoder = new RemoteNdjsonDecoder();
+    const payload = "a".repeat(MAX_REMOTE_FRAME_BYTES);
+    const encoded = encoder.encode(`${payload}\n`);
+    const frames: Array<string> = [];
+
+    for (let index = 0; index < encoded.byteLength; index += 1) {
+        frames.push(...decoder.push(encoded.subarray(index, index + 1)));
+    }
+
+    expect(frames).toEqual([payload]);
+    decoder.end();
+});

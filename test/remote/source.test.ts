@@ -112,10 +112,11 @@ test("a mismatched response id fails pending and future operations", async () =>
     await expect(Effect.runPromise(adapter.focusProject("/remote/repo"))).rejects.toThrow(
         "does not match",
     );
+    await expect(bridge.waitUntilClosed()).rejects.toThrow("does not match");
     input.end();
 });
 
-test("remote source bridge exposes input EOF so its process can terminate", async () => {
+test("remote source bridge exposes input EOF as a process failure", async () => {
     const input = new AsyncInput();
     const bridge = new RemoteSourceBridge({ input, write: () => undefined });
     bridge.start();
@@ -123,6 +124,19 @@ test("remote source bridge exposes input EOF so its process can terminate", asyn
     const closed = bridge.waitUntilClosed();
     input.end();
 
-    await expect(closed).resolves.toBeUndefined();
+    await expect(closed).rejects.toThrow("input ended");
     await expect(bridge.request("focus_project", "/remote/repo")).rejects.toThrow("input ended");
+});
+
+test("remote source bridge distinguishes scoped close from input failure", async () => {
+    const input = new AsyncInput();
+    const bridge = new RemoteSourceBridge({ input, write: () => undefined });
+    bridge.start();
+
+    const closed = bridge.waitUntilClosed();
+    bridge.close();
+
+    await expect(closed).resolves.toBeUndefined();
+    await expect(bridge.request("focus_project", "/remote/repo")).rejects.toThrow("closed");
+    input.end();
 });

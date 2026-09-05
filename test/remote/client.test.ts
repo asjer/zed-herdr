@@ -86,9 +86,12 @@ test("remote client dispatches a validated SSH project to local Zed and acknowle
             },
         };
         const transport: RemoteTransport = {
-            install: async (_config, digest) => {
-                expect(digest).toMatch(/^[a-f0-9]{64}$/u);
-                return `.cache/zed-herdr/${digest}.js`;
+            install: async (_config, artifact) => {
+                expect(artifact.digest).toMatch(/^[a-f0-9]{64}$/u);
+                expect(new TextDecoder().decode(artifact.bytes)).toBe("source bundle");
+                await writeFile(sourceArtifact, "replacement after snapshot");
+                expect(new TextDecoder().decode(artifact.bytes)).toBe("source bundle");
+                return `.cache/zed-herdr/${artifact.digest}.js`;
             },
             connect: () => child,
         };

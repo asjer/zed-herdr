@@ -31,10 +31,14 @@ type Pending = {
     readonly timer: ReturnType<typeof setTimeout>;
 };
 
+type BridgeCompletion =
+    | { readonly _tag: "Closed" }
+    | { readonly _tag: "Failed"; readonly cause: Error };
+
 export class RemoteSourceBridge {
     readonly #io: RemoteBridgeIo;
     readonly #pending = new Map<string, Pending>();
-    readonly #completion = Promise.withResolvers<void>();
+    readonly #completion = Promise.withResolvers<BridgeCompletion>();
     #failure: Error | null = null;
     #reader: Promise<void> | null = null;
     #completed = false;
@@ -52,11 +56,15 @@ export class RemoteSourceBridge {
     }
 
     close(): void {
-        this.#failAll(new RemoteProtocolError("Remote bridge closed"));
+        this.#rejectPending(new RemoteProtocolError("Remote bridge closed"));
+        this.#complete({ _tag: "Closed" });
     }
 
-    waitUntilClosed(): Promise<void> {
-        return this.#completion.promise;
+    async waitUntilClosed(): Promise<void> {
+        const completion = await this.#completion.promise;
+        if (completion._tag === "Failed") {
+            throw completion.cause;
+        }
     }
 
     request(operation: RemoteRequest["operation"], path: string): Promise<void> {
@@ -112,15 +120,16 @@ export class RemoteSourceBridge {
             decoder.end();
             throw new RemoteProtocolError("Remote bridge input ended");
         } catch (cause) {
-            this.#failAll(
+            const failure =
                 cause instanceof Error
                     ? cause
-                    : new RemoteProtocolError("Remote bridge input failed"),
-            );
+                    : new RemoteProtocolError("Remote bridge input failed");
+            this.#rejectPending(failure);
+            this.#complete({ _tag: "Failed", cause: failure });
         }
     }
 
-    #failAll(cause: Error): void {
+    #rejectPending(cause: Error): void {
         if (this.#failure === null) {
             this.#failure = cause;
         }
@@ -129,9 +138,12 @@ export class RemoteSourceBridge {
             pending.reject(this.#failure);
         }
         this.#pending.clear();
+    }
+
+    #complete(completion: BridgeCompletion): void {
         if (!this.#completed) {
             this.#completed = true;
-            this.#completion.resolve();
+            this.#completion.resolve(completion);
         }
     }
 }

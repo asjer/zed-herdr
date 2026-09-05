@@ -83,48 +83,29 @@ export const encodeRemoteFrame = (
 /** Fatal UTF-8, newline-delimited framing with a hard limit on every complete or partial frame. */
 export class RemoteNdjsonDecoder {
     readonly #decoder = new TextDecoder("utf-8", { fatal: true });
-    #buffer = new Uint8Array(0);
+    #chunks: Array<Uint8Array> = [];
+    #bufferedBytes = 0;
 
     push(chunk: Uint8Array): ReadonlyArray<string> {
-        const combined = new Uint8Array(this.#buffer.byteLength + chunk.byteLength);
-        combined.set(this.#buffer);
-        combined.set(chunk, this.#buffer.byteLength);
-
         const frames: Array<string> = [];
         let start = 0;
-        for (let index = 0; index < combined.byteLength; index += 1) {
-            if (combined[index] !== 0x0a) {
-                if (index - start + 1 > MAX_REMOTE_FRAME_BYTES) {
-                    throw new RemoteProtocolError("Remote bridge frame exceeds 64 KiB");
-                }
-                continue;
+
+        for (;;) {
+            const newline = chunk.indexOf(0x0a, start);
+            if (newline < 0) {
+                this.#append(chunk.subarray(start));
+                return frames;
             }
 
-            let end = index;
-            if (end > start && combined[end - 1] === 0x0d) {
-                end -= 1;
-            }
-            if (end - start > MAX_REMOTE_FRAME_BYTES) {
-                throw new RemoteProtocolError("Remote bridge frame exceeds 64 KiB");
-            }
-            try {
-                frames.push(this.#decoder.decode(combined.subarray(start, end)));
-            } catch {
-                throw new RemoteProtocolError("Remote bridge frame is not valid UTF-8");
-            }
-            start = index + 1;
+            this.#append(chunk.subarray(start, newline));
+            frames.push(this.#decodeFrame());
+            start = newline + 1;
         }
-
-        this.#buffer = combined.slice(start);
-        if (this.#buffer.byteLength > MAX_REMOTE_FRAME_BYTES) {
-            throw new RemoteProtocolError("Remote bridge frame exceeds 64 KiB");
-        }
-        return frames;
     }
 
     end(): void {
-        if (this.#buffer.byteLength !== 0) {
-            this.#buffer = new Uint8Array(0);
+        if (this.#bufferedBytes !== 0) {
+            this.#reset();
             throw new RemoteProtocolError("Remote bridge ended with an unterminated frame");
         }
         try {
@@ -132,5 +113,38 @@ export class RemoteNdjsonDecoder {
         } catch {
             throw new RemoteProtocolError("Remote bridge frame is not valid UTF-8");
         }
+    }
+
+    #append(chunk: Uint8Array): void {
+        if (this.#bufferedBytes + chunk.byteLength > MAX_REMOTE_FRAME_BYTES) {
+            throw new RemoteProtocolError("Remote bridge frame exceeds 64 KiB");
+        }
+        if (chunk.byteLength === 0) {
+            return;
+        }
+        this.#chunks.push(chunk.slice());
+        this.#bufferedBytes += chunk.byteLength;
+    }
+
+    #decodeFrame(): string {
+        const bytes = new Uint8Array(this.#bufferedBytes);
+        let offset = 0;
+        for (const chunk of this.#chunks) {
+            bytes.set(chunk, offset);
+            offset += chunk.byteLength;
+        }
+        this.#reset();
+
+        const end = bytes.at(-1) === 0x0d ? bytes.byteLength - 1 : bytes.byteLength;
+        try {
+            return this.#decoder.decode(bytes.subarray(0, end));
+        } catch {
+            throw new RemoteProtocolError("Remote bridge frame is not valid UTF-8");
+        }
+    }
+
+    #reset(): void {
+        this.#chunks = [];
+        this.#bufferedBytes = 0;
     }
 }
