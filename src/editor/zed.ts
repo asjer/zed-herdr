@@ -10,11 +10,13 @@ import * as Stream from "effect/Stream";
 import { isAbsolute } from "node:path";
 
 import { EditorAdapterError } from "../domain/errors.ts";
+import { isValidSshTarget } from "../remote/config.ts";
 import { EditorAdapter } from "../services/editor-adapter.ts";
 import type { EditorAdapterService } from "../services/editor-adapter.ts";
 
 export interface ZedEditorAdapterOptions {
     readonly executable?: string;
+    readonly sshAuthority?: string;
 }
 
 const fallbackExecutable = "/Applications/Zed.app/Contents/MacOS/cli";
@@ -149,32 +151,51 @@ const runCommand = (
         }),
     );
 
+export const makeZedProjectTarget = (path: string, sshAuthority?: string): string | undefined => {
+    if (sshAuthority === undefined) {
+        return isAbsolute(path) ? path : undefined;
+    }
+    if (!isValidSshTarget(sshAuthority) || !path.startsWith("/") || path.includes("\0")) {
+        return undefined;
+    }
+    const encodedPath = path
+        .split("/")
+        .map((segment) => encodeURIComponent(segment))
+        .join("/");
+    return `ssh://${sshAuthority}${encodedPath}`;
+};
+
 const runZed = (
     executor: CommandExecutor.CommandExecutor,
     executable: string | undefined,
     platform: string,
     operation: Operation,
     path: string,
+    sshAuthority?: string,
 ): Effect.Effect<void, EditorAdapterError> => {
-    if (!isAbsolute(path)) {
+    const target = makeZedProjectTarget(path, sshAuthority);
+    if (target === undefined) {
         return Effect.fail(
             new EditorAdapterError({
                 operation,
                 path: path || ".",
                 exitCode: null,
                 stderr: "",
-                message: "Zed project path must be absolute",
+                message:
+                    sshAuthority === undefined
+                        ? "Zed project path must be absolute"
+                        : "Zed remote project requires a valid SSH authority and absolute POSIX path",
             }),
         );
     }
 
-    const primary = runCommand(executor, executable ?? "zed", path);
+    const primary = runCommand(executor, executable ?? "zed", target);
     const attempted =
         executable === undefined && platform === "darwin"
             ? primary.pipe(
                   Effect.catchAll((failure) =>
                       isExecutableNotFound(failure)
-                          ? runCommand(executor, fallbackExecutable, path)
+                          ? runCommand(executor, fallbackExecutable, target)
                           : Effect.fail(failure),
                   ),
               )
@@ -197,6 +218,7 @@ const runZed = (
 export const makeZedEditorAdapter = (
     executable?: string,
     platform: string = process.platform,
+    sshAuthority?: string,
 ): Effect.Effect<EditorAdapterService, never, CommandExecutor.CommandExecutor> =>
     Effect.gen(function* () {
         const executor = yield* CommandExecutor.CommandExecutor;
@@ -204,7 +226,9 @@ export const makeZedEditorAdapter = (
         const ensuredRoots = new Set<string>();
 
         const execute = (operation: Operation, path: string) =>
-            runZed(executor, executable, platform, operation, path).pipe(commands.withPermits(1));
+            runZed(executor, executable, platform, operation, path, sshAuthority).pipe(
+                commands.withPermits(1),
+            );
 
         return {
             ensureProject: (path) =>
@@ -212,7 +236,14 @@ export const makeZedEditorAdapter = (
                     Effect.suspend(() =>
                         ensuredRoots.has(path)
                             ? Effect.void
-                            : runZed(executor, executable, platform, "ensure_project", path).pipe(
+                            : runZed(
+                                  executor,
+                                  executable,
+                                  platform,
+                                  "ensure_project",
+                                  path,
+                                  sshAuthority,
+                              ).pipe(
                                   Effect.tap(() =>
                                       Effect.sync(() => {
                                           ensuredRoots.add(path);
@@ -234,4 +265,7 @@ export const ZedEditorAdapter = (
 export const makeZedEditorAdapterLayer = (
     options: ZedEditorAdapterOptions = {},
 ): Layer.Layer<EditorAdapter, never, CommandExecutor.CommandExecutor> =>
-    Layer.effect(EditorAdapter, makeZedEditorAdapter(options.executable));
+    Layer.effect(
+        EditorAdapter,
+        makeZedEditorAdapter(options.executable, process.platform, options.sshAuthority),
+    );

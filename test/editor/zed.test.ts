@@ -118,9 +118,10 @@ const withAdapter = <Value, Failure>(
     body: (adapter: EditorAdapterService) => Effect.Effect<Value, Failure>,
     executable?: string,
     platform?: string,
+    sshAuthority?: string,
 ): Promise<Value> =>
     Effect.runPromise(
-        makeZedEditorAdapter(executable, platform).pipe(
+        makeZedEditorAdapter(executable, platform, sshAuthority).pipe(
             Effect.provideService(CommandExecutor.CommandExecutor, harness.executor),
             Effect.flatMap(body),
         ),
@@ -134,6 +135,54 @@ test("uses the configured executable for exact shell-free Zed argv", async () =>
     expect(harness.calls).toEqual([
         { command: "/tools/zed", args: ["-e", "/repos/alpha"], shell: false },
     ]);
+});
+
+test("encodes SSH project targets as a single shell-free Zed argument", async () => {
+    const harness = makeExecutor([{}, {}]);
+
+    await withAdapter(
+        harness,
+        (adapter) =>
+            Effect.gen(function* () {
+                yield* adapter.ensureProject("/home/exedev/work trees/repo#1");
+                yield* adapter.focusProject("/home/exedev/ümlaut%repo");
+            }),
+        "/tools/zed",
+        "darwin",
+        "pi-remote.exe.xyz",
+    );
+
+    expect(harness.calls).toEqual([
+        {
+            command: "/tools/zed",
+            args: ["-e", "ssh://pi-remote.exe.xyz/home/exedev/work%20trees/repo%231"],
+            shell: false,
+        },
+        {
+            command: "/tools/zed",
+            args: ["-e", "ssh://pi-remote.exe.xyz/home/exedev/%C3%BCmlaut%25repo"],
+            shell: false,
+        },
+    ]);
+});
+
+test("rejects unsafe SSH authorities and non-absolute remote paths before spawning", async () => {
+    for (const [authority, path] of [
+        ["-oProxyCommand=bad", "/repo"],
+        ["host name", "/repo"],
+        ["host", "relative/repo"],
+    ] as const) {
+        const harness = makeExecutor([]);
+        const result = await withAdapter(
+            harness,
+            (adapter) => adapter.focusProject(path).pipe(Effect.either),
+            "/tools/zed",
+            "darwin",
+            authority,
+        );
+        expect(result._tag).toBe("Left");
+        expect(harness.calls).toEqual([]);
+    }
 });
 
 test("drains every stdout chunk before a successful command completes", async () => {
@@ -181,6 +230,24 @@ test("uses the macOS bundled CLI only after PATH zed is not found", async () => 
         "/Applications/Zed.app/Contents/MacOS/cli",
     ]);
     expect(harness.calls.every((call) => call.args[0] === "-e" && call.shell === false)).toBe(true);
+});
+
+test("preserves the SSH target when using the macOS bundled CLI fallback", async () => {
+    const harness = makeExecutor([{ startError: notFound("zed") }, {}]);
+
+    await withAdapter(
+        harness,
+        (adapter) => adapter.focusProject("/remote/work tree"),
+        undefined,
+        "darwin",
+        "remote-host",
+    );
+
+    expect(harness.calls[1]).toEqual({
+        command: "/Applications/Zed.app/Contents/MacOS/cli",
+        args: ["-e", "ssh://remote-host/remote/work%20tree"],
+        shell: false,
+    });
 });
 
 test("does not fall back for configured binaries, non-macOS hosts, or non-not-found failures", async () => {
