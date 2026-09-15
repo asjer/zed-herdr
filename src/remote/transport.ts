@@ -95,7 +95,9 @@ export const remoteConnectCommand = (
     config.sshBin,
     "-T",
     config.sshTarget,
-    ...(config.session === undefined ? [] : ["env", `HERDR_SESSION=${config.session}`]),
+    "env",
+    'PATH="$HOME/.bun/bin:$PATH"',
+    ...(config.session === undefined ? [] : [`HERDR_SESSION=${config.session}`]),
     "bun",
     remotePath,
 ];

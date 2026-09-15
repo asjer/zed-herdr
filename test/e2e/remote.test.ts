@@ -151,6 +151,7 @@ import { join } from "node:path";
 const args = process.argv.slice(2);
 const home = process.env.FAKE_REMOTE_HOME;
 if (!home) process.exit(90);
+process.env.HOME = home;
 const remote = args.slice(2);
 if (remote[0] === "install" && remote[1] === "-d") {
   await mkdir(join(home, remote[4]), { recursive: true });
@@ -162,9 +163,19 @@ if (remote[0] === "mv" && remote[1] === "-f") {
 }
 let command = remote;
 if (command[0] === "env") {
-  const [key, value] = command[1].split("=", 2);
-  process.env[key] = value;
-  command = command.slice(2);
+  command = command.slice(1);
+  while (command[0]?.includes("=")) {
+    const separator = command[0].indexOf("=");
+    const key = command[0].slice(0, separator);
+    const rawValue = command[0].slice(separator + 1);
+    const unquoted = rawValue.startsWith('"') && rawValue.endsWith('"')
+      ? rawValue.slice(1, -1)
+      : rawValue;
+    process.env[key] = unquoted
+      .replaceAll("$HOME", process.env.HOME ?? "")
+      .replaceAll("$PATH", process.env.PATH ?? "");
+    command = command.slice(1);
+  }
 }
 if (command[0] !== "bun") process.exit(91);
 const child = Bun.spawn([process.execPath, join(home, command[1])], {

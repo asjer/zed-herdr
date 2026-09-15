@@ -52,8 +52,9 @@ herdr --remote pi-remote.exe.xyz
 The SSH target must be the same SSH-config alias Zed can use. Put ports, jump hosts, identity files,
 and other SSH options in `~/.ssh/config`; remote mode deliberately accepts no caller-provided SSH
 flags. The local machine needs OpenSSH and Zed. The remote host needs Bun, Git, HerdR 0.7.3+, and a
-running HerdR session. Bun must be available to a noninteractive SSH command. The plugin does not
-need to be installed remotely. If it was previously enabled there, disable it so its normal hook
+running HerdR session. The fixed remote command prepends `$HOME/.bun/bin` to the noninteractive
+`PATH`, covering Bun's standard user installation as well as an existing system installation. The
+plugin does not need to be installed remotely. If it was previously enabled there, disable it so its normal hook
 does not open a second daemon that tries to control a remote desktop:
 
 ```bash
@@ -169,7 +170,7 @@ action target but leaves the user-configured keybinding in place.
 - **Protocol mismatch:** HerdR must report protocol 16 or newer. A value below 16 is logged as `herdr_protocol_unsupported` and stops reconnecting rather than guessing or downgrading. Newer values are accepted; values above the highest tested protocol are reported by `health` with `beyondTested: true` and log `herdr_protocol_beyond_tested` once.
 - **Socket or health failure:** confirm `HERDR_SOCKET_PATH`, `HERDR_SESSION`, and `XDG_CONFIG_HOME` describe the intended session, then inspect the plugin log and daemon pane output above. Focusing or creating a workspace will run the activation hook again.
 - **Zed errors:** ensure `ZED_BIN` points to an executable, or that `zed` is on `PATH`; inspect the daemon or remote-companion output for the failed `zed -e` command. The daemon leaves HerdR and existing Zed state unchanged when Zed rejects or times out.
-- **Remote source exits before hello:** verify normal `ssh <target>`, then verify `ssh <target> bun --version`; remote mode does not guess an interactive-shell Bun path.
+- **Remote source exits before hello:** verify normal `ssh <target>`, then verify `ssh <target> 'PATH="$HOME/.bun/bin:$PATH" bun --version'`. Remote mode supports Bun's standard user installation and the existing noninteractive `PATH`, but does not source interactive shell startup files.
 - **Remote workspace is skipped:** remote mode intentionally has no cwd-hint bridge. Use a HerdR worktree-backed workspace and inspect the remote companion's `workspace_sync_skipped` log.
 
 ## Disable or remove

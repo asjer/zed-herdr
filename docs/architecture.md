@@ -87,8 +87,8 @@ See [Runtime composition](runtime.md), [HerdR workspace source](herdr.md),
 1. `remote <ssh-target> [--session <name>]` validates option-free tokens before starting a process.
 2. The local client hashes the standalone source bundle and copies it to a content-addressed path
    below the remote user's `.cache/zed-herdr/` directory.
-3. One long-lived exact-argv SSH process starts that bundle with the optional fixed
-   `HERDR_SESSION=<name>` environment token.
+3. One long-lived exact-argv SSH process starts that bundle with `$HOME/.bun/bin` prepended to the
+   existing remote `PATH` and the optional fixed `HERDR_SESSION=<name>` environment token.
 4. The source performs the normal S1/subscription/S2 sequence and resolves Git roots on the remote
    filesystem.
 5. Its bridge adapter sends only `ensure_project` and `focus_project` requests. The local client

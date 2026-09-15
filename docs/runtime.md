@@ -53,9 +53,9 @@ lock coordination into the Effect service graph.
 [`parseRemoteConfig`](../src/remote/config.ts) accepts only `[user@]host-or-alias` and an optional
 ASCII session token. SSH ports, keys, jump hosts, and other options remain SSH-config concerns.
 `runRemoteClient` hashes `dist/remote-source.js`, uses fixed `ssh`/`scp` argv to place it in a remote
-content-addressed cache, and owns the one long-lived SSH child. The standalone
-[`remote-source.ts`](../remote-source.ts) redirects Effect logs to stderr so stdout is exclusively
-the bridge protocol.
+content-addressed cache, prepends `$HOME/.bun/bin` to the remote command's existing `PATH`, and owns
+the one long-lived SSH child. The standalone [`remote-source.ts`](../remote-source.ts) redirects
+Effect logs to stderr so stdout is exclusively the bridge protocol.
 
 The remote source composes the existing HerdR source and synchronization daemon with an empty hint
 stream and an acknowledged bridge editor adapter. Its local counterpart composes the existing Zed

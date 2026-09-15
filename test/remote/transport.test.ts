@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -63,6 +63,8 @@ test("OpenSSH transport builds exact argv without a shell or caller-provided opt
         "/tools/ssh",
         "-T",
         "pi-remote.exe.xyz",
+        "env",
+        'PATH="$HOME/.bun/bin:$PATH"',
         "bun",
         remotePath,
     ]);
@@ -74,10 +76,38 @@ test("named session reaches only the fixed env token in the long-lived command",
         "-T",
         "pi-remote.exe.xyz",
         "env",
+        'PATH="$HOME/.bun/bin:$PATH"',
         "HERDR_SESSION=agents-1",
         "bun",
         remotePath,
     ]);
+});
+
+test("remote shell expansion preserves a standard Bun path beneath a HOME containing spaces", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "zed-herdr-shell-"));
+    const home = join(directory, "remote home");
+    const bunDirectory = join(home, ".bun/bin");
+    const bun = join(bunDirectory, "bun");
+    const record = join(directory, "record");
+
+    try {
+        await mkdir(bunDirectory, { recursive: true });
+        await writeFile(bun, `#!/bin/sh\nprintf '%s' "$1" > ${JSON.stringify(record)}\n`);
+        await chmod(bun, 0o755);
+        const remoteCommand = remoteConnectCommand(config(), remotePath).slice(3).join(" ");
+        const child = Bun.spawn(["/bin/sh", "-c", remoteCommand], {
+            env: { HOME: home, PATH: "/usr/bin:/bin" },
+            stdout: "ignore",
+            stderr: "pipe",
+        });
+        const stderr = await new Response(child.stderr).text();
+
+        expect(await child.exited).toBe(0);
+        expect(stderr).toBe("");
+        expect(await readFile(record, "utf8")).toBe(remotePath);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
 });
 
 test("install failures preserve the original error and clean remote temporary files when possible", async () => {

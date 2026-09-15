@@ -84,7 +84,7 @@ Build before any command or E2E test that uses `dist/index.js`.
 - Never cache failed resolution or editor operations. Recheck generation before cache/editor side effects; disconnecting generation N must leave no effects while N+1 may proceed.
 - Invoke Zed without a shell and with only `-e <project-target>`. Local targets are absolute Git roots; remote targets are percent-encoded `ssh://` URLs built from a fixed validated authority and an absolute POSIX Git root. Preserve the five-second timeout, process termination, and bounded final stderr tail.
 - Keep remote bridge frames versioned, exact-schema, fatal-UTF-8, newline-delimited, and at most 64 KiB. Only `ensure_project` and `focus_project` may cross it, and remote success requires a matching local acknowledgement.
-- Treat SSH aliases and session names as strict tokens. Remote paths never enter SSH argv or remote command text. The only SSH commands are fixed cache setup/upload and one long-lived Bun source process.
+- Treat SSH aliases and session names as strict tokens. Remote paths never enter SSH argv or remote command text. The only SSH commands are fixed cache setup/upload and one long-lived Bun source process; that process may use the fixed `PATH=$HOME/.bun/bin:$PATH` bootstrap so standard user Bun installs work in noninteractive SSH sessions.
 - Treat control sockets and hook locks as owner-only resources. Preserve UID, mode, inode, symlink, one-frame, fatal UTF-8, and 64 KiB checks; never blindly unlink or replace a socket path.
 - Keep stable JSON log event names and fields (`workspace_sync_started`, `workspace_sync_succeeded`, `workspace_sync_skipped`, `workspace_sync_failed`). `elapsed_ms` begins at event ingress and includes the debounce.
 
